@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.21 AS builder
 
 WORKDIR /app
 
@@ -13,11 +13,16 @@ COPY . .
 # Build the application
 RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o msim-server .
 
-# Runtime stage
-FROM alpine:latest
+# Runtime stage - use Debian for glibc compatibility
+FROM debian:bookworm-slim
 
 # Install SQLite, CA certificates and netcat for healthcheck
-RUN apk --no-cache add ca-certificates sqlite netcat-openbsd
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libsqlite3-0 \
+    netcat-openbsd && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
