@@ -48,6 +48,48 @@ go build -o msim-server .
 MSIM_PORT=3215 MSIM_DB_PATH=/path/to/msim.db ./msim-server
 ```
 
+## Docker
+
+### Запуск с docker-compose
+
+Самый простой способ запустить сервер:
+
+```bash
+docker-compose up -d
+```
+
+Сервер будет доступен на порту 3215. База данных сохраняется в Docker volume `msim-data`.
+
+Для остановки:
+
+```bash
+docker-compose down
+```
+
+Для просмотра логов:
+
+```bash
+docker-compose logs -f
+```
+
+### Сборка Docker образа
+
+```bash
+docker build -t msim-server .
+```
+
+### Запуск контейнера
+
+```bash
+docker run -d \
+  --name msim-server \
+  -p 3215:3215 \
+  -e MSIM_PORT=3215 \
+  -e MSIM_DB_PATH=/app/data/msim.db \
+  -v msim-data:/app/data \
+  msim-server
+```
+
 ## Архитектура
 
 Проект организован в следующие пакеты:

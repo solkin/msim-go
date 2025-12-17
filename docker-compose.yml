@@ -1,0 +1,26 @@
+services:
+  msim-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: msim-server
+    ports:
+      - "3215:3215"
+    environment:
+      - MSIM_PORT=3215
+      - MSIM_DB_PATH=/app/data/msim.db
+      - MSIM_READ_TIMEOUT=120
+      - MSIM_WRITE_TIMEOUT=30
+    volumes:
+      - msim-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-c", "echo | nc localhost 3215 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  msim-data:
+

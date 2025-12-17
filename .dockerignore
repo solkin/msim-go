@@ -1,0 +1,40 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+msim-server
+msim-server.exe
+*.test
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documentation (optional, can be included if needed)
+# README.md
+# SPECIFICATION.md
+# LICENSE
+
+# Test files
+*_test.go
+
+# Logs
+*.log
+
