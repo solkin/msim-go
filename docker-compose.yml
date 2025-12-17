@@ -14,6 +14,12 @@ services:
     volumes:
       - msim-data:/app/data
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        compress: "true"
     healthcheck:
       test: ["CMD", "sh", "-c", "echo | nc localhost 3215 || exit 1"]
       interval: 30s

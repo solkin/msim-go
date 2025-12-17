@@ -580,8 +580,10 @@ func (s *Server) handleBye(session *Session, pkt *protocol.Packet, conn net.Conn
 
 	// Удаляем сессию
 	if session.Login != "" {
+		remoteAddr := conn.RemoteAddr().String()
 		s.removeSession(session.Login)
 		s.notifyContactsOffline(session.Login)
+		log.Printf("Client %s disconnected (bye) from %s", session.Login, remoteAddr)
 	}
 
 	// Соединение закроется в defer handleConnection

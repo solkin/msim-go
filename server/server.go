@@ -74,7 +74,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	}()
 
 	remoteAddr := conn.RemoteAddr().String()
-	log.Printf("New connection from %s", remoteAddr)
+	log.Printf("New client connected from %s", remoteAddr)
 
 	session := &Session{
 		Conn:     conn,
@@ -95,11 +95,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 				s.mu.Lock()
 				if sess, ok := s.sessions[sess.Login]; ok {
 					if time.Since(sess.LastPing) > s.config.ReadTimeout {
+						login := sess.Login
 						s.mu.Unlock()
 						// Устанавливаем флаг для отправки bye с причиной timeout
 						shouldSendBye = true
 						byeReason = "timeout"
 						byeDetails = ""
+						log.Printf("Client %s disconnected due to timeout from %s", login, remoteAddr)
 						conn.Close()
 						return
 					}
@@ -164,9 +166,9 @@ func (s *Server) handleConnection(conn net.Conn) {
 	if session.Login != "" {
 		s.removeSession(session.Login)
 		s.notifyContactsOffline(session.Login)
-		log.Printf("Connection closed for user %s from %s", session.Login, remoteAddr)
+		log.Printf("Client %s disconnected from %s", session.Login, remoteAddr)
 	} else {
-		log.Printf("Connection closed from %s", remoteAddr)
+		log.Printf("Client disconnected from %s", remoteAddr)
 	}
 }
 
