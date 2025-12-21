@@ -306,3 +306,17 @@ func (s *Server) getSessionConn(login string) (net.Conn, bool) {
 	}
 	return session.Conn, true
 }
+
+// GetStats returns server statistics as a formatted string
+func (s *Server) GetStats() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	activeConnections := len(s.sessions)
+	var users []string
+	for login := range s.sessions {
+		users = append(users, login)
+	}
+
+	return "connections=" + strconv.Itoa(activeConnections) + ",users=" + strings.Join(users, ";")
+}
