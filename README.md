@@ -85,10 +85,10 @@ MSIM_PORT=3215 MSIM_DB_PATH=/path/to/msim.db ./msim-server
 
 ### Управление сервером (msimctl.sh)
 
-Для удобного управления сервером используйте скрипт `msimctl.sh`:
+Для удобного управления сервером в Docker используйте скрипт `msimctl.sh`:
 
 ```bash
-# Запуск сервера
+# Запуск сервера (сборка и запуск Docker контейнера)
 ./msimctl.sh start
 
 # Просмотр статуса
@@ -96,6 +96,12 @@ MSIM_PORT=3215 MSIM_DB_PATH=/path/to/msim.db ./msim-server
 
 # Просмотр статистики (активные подключения, онлайн-пользователи)
 ./msimctl.sh stats
+
+# Просмотр логов (в режиме follow)
+./msimctl.sh logs
+
+# Перезапуск сервера
+./msimctl.sh restart
 
 # Остановка сервера (интерактивный режим)
 ./msimctl.sh stop

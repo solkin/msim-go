@@ -7,16 +7,17 @@
 #   ./msimctl.sh stop        - Stop the server (interactive)
 #   ./msimctl.sh stats       - Show server statistics
 #   ./msimctl.sh status      - Check if server is running
+#   ./msimctl.sh logs        - Show server logs
+#   ./msimctl.sh restart     - Restart the server
 #
 
 set -euo pipefail
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVER_BIN="${SCRIPT_DIR}/msim-server"
+CONTAINER_NAME="msim-server"
 CONTROL_SOCKET="/tmp/msim.sock"
-PID_FILE="/tmp/msim.pid"
-LOG_FILE="${SCRIPT_DIR}/msim.log"
+COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 
 # Colors
 RED='\033[0;31m'
@@ -30,7 +31,7 @@ BOLD='\033[1m'
 # Print functions
 print_header() {
     echo -e "${BLUE}╔════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${NC}${BOLD}          mSIM Server Management            ${NC}${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}${BOLD}     mSIM Server Management (Docker)        ${NC}${BLUE}║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════════╝${NC}"
     echo
 }
@@ -51,80 +52,79 @@ print_info() {
     echo -e "${CYAN}ℹ${NC} $1"
 }
 
-# Check if server is running
+# Check if Docker is available
+check_docker() {
+    if ! command -v docker &> /dev/null; then
+        print_error "Docker is not installed or not in PATH"
+        exit 1
+    fi
+    if ! docker info &> /dev/null; then
+        print_error "Docker daemon is not running"
+        exit 1
+    fi
+}
+
+# Check if container is running
 is_running() {
-    if [[ -S "${CONTROL_SOCKET}" ]]; then
-        return 0
-    fi
-    if [[ -f "${PID_FILE}" ]]; then
-        local pid
-        pid=$(cat "${PID_FILE}")
-        if kill -0 "${pid}" 2>/dev/null; then
-            return 0
-        fi
-    fi
-    return 1
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"
 }
 
-# Get server PID
-get_pid() {
-    if [[ -f "${PID_FILE}" ]]; then
-        cat "${PID_FILE}"
-    else
-        echo ""
-    fi
+# Check if container exists (running or stopped)
+container_exists() {
+    docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER_NAME}$"
 }
 
-# Send command to control socket
+# Send command to control socket inside container
 send_command() {
     local cmd="$1"
-    if [[ ! -S "${CONTROL_SOCKET}" ]]; then
-        print_error "Control socket not found. Is the server running?"
-        return 1
-    fi
-    echo "${cmd}" | nc -U "${CONTROL_SOCKET}" 2>/dev/null
+    docker exec "${CONTAINER_NAME}" sh -c "echo '${cmd}' | nc -U ${CONTROL_SOCKET}" 2>/dev/null
 }
 
 # Start server
 cmd_start() {
     print_header
-    echo -e "${BOLD}Starting mSIM Server${NC}"
+    echo -e "${BOLD}Starting mSIM Server (Docker)${NC}"
     echo
 
+    check_docker
+
     if is_running; then
-        print_warning "Server is already running (PID: $(get_pid))"
+        print_warning "Server is already running"
+        docker ps --filter "name=${CONTAINER_NAME}" --format "  Container: {{.Names}}\n  Status: {{.Status}}\n  Ports: {{.Ports}}"
+        return 0
+    fi
+
+    print_info "Building and starting container..."
+    
+    if ! docker compose -f "${COMPOSE_FILE}" up -d --build 2>&1; then
+        print_error "Failed to start container"
         return 1
     fi
 
-    # Build if binary doesn't exist
-    if [[ ! -f "${SERVER_BIN}" ]]; then
-        print_info "Building server..."
-        (cd "${SCRIPT_DIR}" && go build -o msim-server .)
-        if [[ $? -ne 0 ]]; then
-            print_error "Failed to build server"
-            return 1
-        fi
-        print_success "Server built successfully"
-    fi
-
-    # Start server
-    print_info "Starting server..."
-    nohup "${SERVER_BIN}" >> "${LOG_FILE}" 2>&1 &
-    local pid=$!
-    echo "${pid}" > "${PID_FILE}"
-
-    # Wait for socket to appear
+    # Wait for container to be healthy
+    print_info "Waiting for server to be ready..."
     local attempts=0
-    while [[ ! -S "${CONTROL_SOCKET}" ]] && [[ ${attempts} -lt 30 ]]; do
-        sleep 0.1
+    while [[ ${attempts} -lt 30 ]]; do
+        if is_running; then
+            local health
+            health=$(docker inspect --format='{{.State.Health.Status}}' "${CONTAINER_NAME}" 2>/dev/null || echo "none")
+            if [[ "${health}" == "healthy" ]] || [[ "${health}" == "none" ]]; then
+                break
+            fi
+        fi
+        sleep 1
         ((attempts++))
     done
 
     if is_running; then
-        print_success "Server started (PID: ${pid})"
-        print_info "Log file: ${LOG_FILE}"
+        print_success "Server started successfully"
+        echo
+        docker ps --filter "name=${CONTAINER_NAME}" --format "  Container: {{.Names}}
+  Status: {{.Status}}
+  Ports: {{.Ports}}"
     else
         print_error "Failed to start server"
+        print_info "Check logs with: ./msimctl.sh logs"
         return 1
     fi
 }
@@ -134,6 +134,8 @@ cmd_stop() {
     print_header
     echo -e "${BOLD}Stopping mSIM Server${NC}"
     echo
+
+    check_docker
 
     if ! is_running; then
         print_warning "Server is not running"
@@ -183,8 +185,10 @@ cmd_stop() {
 
         if [[ "${downtime_input}" =~ ^[0-9]+$ ]]; then
             # Minutes - calculate completion time
+            # Try GNU date first, then BSD date (macOS)
             completion_time=$(date -u -d "+${downtime_input} minutes" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || \
-                              date -u -v+${downtime_input}M "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null)
+                              date -u -v+${downtime_input}M "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || \
+                              echo "")
         else
             # Assume it's already in ISO format
             completion_time="${downtime_input}"
@@ -206,33 +210,24 @@ cmd_stop() {
     fi
 
     echo
-    print_info "Sending shutdown command to server..."
+    print_info "Sending shutdown command to connected clients..."
 
+    # Try to send graceful shutdown command via control socket
     local cmd="shutdown|${reason}|${completion_time}"
-    local response
-    response=$(send_command "${cmd}" 2>&1) || true
+    send_command "${cmd}" 2>/dev/null || true
 
-    # Wait for server to stop
-    sleep 0.5
+    # Give time for bye messages to be sent
+    sleep 1
+
+    print_info "Stopping container..."
+    docker compose -f "${COMPOSE_FILE}" stop
 
     if ! is_running; then
         print_success "Server stopped successfully"
-        rm -f "${PID_FILE}"
     else
-        print_warning "Server may still be running, sending SIGTERM..."
-        local pid
-        pid=$(get_pid)
-        if [[ -n "${pid}" ]]; then
-            kill -TERM "${pid}" 2>/dev/null || true
-            sleep 1
-            if ! is_running; then
-                print_success "Server stopped"
-                rm -f "${PID_FILE}"
-            else
-                print_error "Failed to stop server, try: kill -9 ${pid}"
-                return 1
-            fi
-        fi
+        print_warning "Container may still be running, forcing stop..."
+        docker compose -f "${COMPOSE_FILE}" kill
+        print_success "Server stopped"
     fi
 }
 
@@ -242,13 +237,23 @@ cmd_stats() {
     echo -e "${BOLD}Server Statistics${NC}"
     echo
 
+    check_docker
+
     if ! is_running; then
         print_error "Server is not running"
         return 1
     fi
 
+    # Get container stats
+    echo -e "${BOLD}Container Info:${NC}"
+    docker ps --filter "name=${CONTAINER_NAME}" --format "  Name: {{.Names}}
+  Status: {{.Status}}
+  Ports: {{.Ports}}"
+    echo
+
+    # Try to get application stats via control socket
     local response
-    response=$(send_command "stats")
+    response=$(send_command "stats" 2>/dev/null) || response=""
 
     if [[ "${response}" == OK* ]]; then
         local stats="${response#OK|}"
@@ -285,8 +290,10 @@ cmd_stats() {
 
         echo -e "└────────────────────────────────────────────┘"
     else
-        print_error "Failed to get statistics: ${response}"
-        return 1
+        print_warning "Could not get application stats (control socket not available)"
+        echo
+        echo -e "${BOLD}Container Resource Usage:${NC}"
+        docker stats "${CONTAINER_NAME}" --no-stream --format "  CPU: {{.CPUPerc}}\n  Memory: {{.MemUsage}}\n  Network I/O: {{.NetIO}}"
     fi
 }
 
@@ -296,27 +303,103 @@ cmd_status() {
     echo -e "${BOLD}Server Status${NC}"
     echo
 
+    check_docker
+
     if is_running; then
-        local pid
-        pid=$(get_pid)
-        print_success "Server is running (PID: ${pid:-unknown})"
+        print_success "Server is running"
         echo
-        echo -e "  Control socket: ${CYAN}${CONTROL_SOCKET}${NC}"
-        echo -e "  Log file: ${CYAN}${LOG_FILE}${NC}"
+        docker ps --filter "name=${CONTAINER_NAME}" --format "  Container: {{.Names}}
+  Image: {{.Image}}
+  Status: {{.Status}}
+  Ports: {{.Ports}}
+  Created: {{.CreatedAt}}"
+        
+        # Check health status
+        local health
+        health=$(docker inspect --format='{{.State.Health.Status}}' "${CONTAINER_NAME}" 2>/dev/null || echo "none")
+        if [[ "${health}" != "none" ]]; then
+            echo -e "  Health: ${health}"
+        fi
+    elif container_exists; then
+        print_warning "Container exists but is not running"
+        docker ps -a --filter "name=${CONTAINER_NAME}" --format "  Status: {{.Status}}"
     else
-        print_warning "Server is not running"
+        print_warning "Server is not running (no container found)"
+    fi
+}
+
+# Show logs
+cmd_logs() {
+    print_header
+    echo -e "${BOLD}Server Logs${NC}"
+    echo
+
+    check_docker
+
+    if ! container_exists; then
+        print_error "Container does not exist"
+        return 1
+    fi
+
+    local lines="${2:-50}"
+    print_info "Showing last ${lines} log lines (Ctrl+C to exit follow mode)"
+    echo
+    docker compose -f "${COMPOSE_FILE}" logs --tail="${lines}" -f
+}
+
+# Restart server
+cmd_restart() {
+    print_header
+    echo -e "${BOLD}Restarting mSIM Server${NC}"
+    echo
+
+    check_docker
+
+    if is_running; then
+        print_info "Sending restart notification to clients..."
+        
+        # Calculate completion time (1 minute from now)
+        local completion_time
+        completion_time=$(date -u -d "+1 minutes" "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || \
+                          date -u -v+1M "+%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || \
+                          echo "")
+        
+        send_command "shutdown|restart|${completion_time}" 2>/dev/null || true
+        sleep 1
+    fi
+
+    print_info "Restarting container..."
+    docker compose -f "${COMPOSE_FILE}" restart
+
+    # Wait for container to be healthy
+    local attempts=0
+    while [[ ${attempts} -lt 30 ]]; do
+        if is_running; then
+            break
+        fi
+        sleep 1
+        ((attempts++))
+    done
+
+    if is_running; then
+        print_success "Server restarted successfully"
+    else
+        print_error "Failed to restart server"
+        return 1
     fi
 }
 
 # Show usage
 usage() {
-    echo "Usage: $0 {start|stop|stats|status}"
+    echo "Usage: $0 {start|stop|stats|status|logs|restart}"
     echo
     echo "Commands:"
-    echo "  start   - Start the mSIM server"
+    echo "  start   - Start the mSIM server (Docker)"
     echo "  stop    - Stop the server (interactive, with reason selection)"
     echo "  stats   - Show server statistics"
     echo "  status  - Check if server is running"
+    echo "  logs    - Show server logs (follow mode)"
+    echo "  restart - Restart the server"
     echo
 }
 
@@ -334,9 +417,14 @@ case "${1:-}" in
     status)
         cmd_status
         ;;
+    logs)
+        cmd_logs "$@"
+        ;;
+    restart)
+        cmd_restart
+        ;;
     *)
         usage
         exit 1
         ;;
 esac
-

@@ -13,6 +13,7 @@ services:
       - MSIM_WRITE_TIMEOUT=30
     volumes:
       - msim-data:/app/data
+      - msim-control:/tmp
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -29,4 +30,5 @@ services:
 
 volumes:
   msim-data:
+  msim-control:
 
