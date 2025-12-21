@@ -28,27 +28,28 @@ var (
 
 // App is the main application
 type App struct {
-	app              *tview.Application
-	pages            *tview.Pages
-	client           *protocol.Client
-	serverAddr       string
-	currentUser      string
-	currentPass      string
-	contacts         []protocol.Contact
-	statuses         map[string]bool
-	statusLastSeen   map[string]string // last seen timestamp per contact
-	unreadCounts     map[string]int    // unread message count per contact
-	unreadMarker     int               // position of unread marker in current chat (messages before this are read)
-	messages         map[string][]protocol.Message
-	currentChat      string
-	mu               sync.RWMutex
-	contactsList     *tview.List
-	chatView         *tview.TextView
-	messageInput     *tview.InputField
-	statusBar        *tview.TextView
-	connectionView   *tview.TextView
-	statusTicker     *time.Ticker
-	statusTickerDone chan struct{}
+	app                *tview.Application
+	pages              *tview.Pages
+	client             *protocol.Client
+	serverAddr         string
+	currentUser        string
+	currentPass        string
+	contacts           []protocol.Contact
+	statuses           map[string]bool
+	statusLastSeen     map[string]string // last seen timestamp per contact
+	unreadCounts       map[string]int    // unread message count per contact
+	unreadMarker       int               // position of unread marker in current chat (messages before this are read)
+	pendingUnreadCount int               // temporary storage for unread count before history loads
+	messages           map[string][]protocol.Message
+	currentChat        string
+	mu                 sync.RWMutex
+	contactsList       *tview.List
+	chatView           *tview.TextView
+	messageInput       *tview.InputField
+	statusBar          *tview.TextView
+	connectionView     *tview.TextView
+	statusTicker       *time.Ticker
+	statusTickerDone   chan struct{}
 }
 
 // NewApp creates a new application instance
@@ -861,8 +862,8 @@ func (a *App) openChat(contactID string) {
 	a.mu.Lock()
 	a.currentChat = contactID
 	// Store unread count for marker calculation after history loads
-	unreadCount := a.unreadCounts[contactID]
-	a.unreadMarker = unreadCount // Temporarily store count, will be converted to position after history loads
+	a.pendingUnreadCount = a.unreadCounts[contactID]
+	a.unreadMarker = -1 // Will be calculated after history loads
 	// Reset unread count when opening chat
 	a.unreadCounts[contactID] = 0
 	a.mu.Unlock()
@@ -1033,13 +1034,20 @@ func (a *App) loadHistory(contactID string) {
 			messages := protocol.ParseHistory(content)
 			a.mu.Lock()
 			a.messages[contactID] = messages
-			// Calculate unread marker position from stored unread count
-			unreadCount := a.unreadMarker
-			if unreadCount > 0 && unreadCount <= len(messages) {
-				a.unreadMarker = len(messages) - unreadCount
-			} else {
-				a.unreadMarker = -1 // No marker
+			// Calculate unread marker position from pending unread count (only once)
+			// Only process if there's a pending count - don't reset marker if already set
+			unreadCount := a.pendingUnreadCount
+			if unreadCount > 0 {
+				if unreadCount <= len(messages) {
+					a.unreadMarker = len(messages) - unreadCount
+				} else {
+					// More unreads than messages - show marker at beginning
+					a.unreadMarker = 0
+				}
+				// Reset pending count only after processing
+				a.pendingUnreadCount = 0
 			}
+			// If pendingUnreadCount was 0, don't touch unreadMarker (might be set by previous handler)
 			a.mu.Unlock()
 			a.app.QueueUpdateDraw(func() {
 				a.refreshChatView()
