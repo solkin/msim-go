@@ -1061,13 +1061,27 @@ func (a *App) refreshChatView() {
 	unreadMarker := a.unreadMarker
 	a.mu.RUnlock()
 
+	// Get chat view width for full-width separator
+	_, _, width, _ := a.chatView.GetInnerRect()
+	if width < 10 {
+		width = 80 // Default width
+	}
+
 	a.chatView.Clear()
 	var sb strings.Builder
 
 	for i, msg := range messages {
 		// Insert unread marker before unread messages
 		if unreadMarker >= 0 && i == unreadMarker {
-			sb.WriteString("[red]────────── Unread ──────────[-]\n")
+			// Create full-width separator with "Unread" in the middle
+			label := " Unread "
+			sideLen := (width - len(label)) / 2
+			if sideLen < 1 {
+				sideLen = 1
+			}
+			leftSide := strings.Repeat("─", sideLen)
+			rightSide := strings.Repeat("─", width-sideLen-len(label))
+			sb.WriteString(fmt.Sprintf("[red]%s%s%s[-]\n", leftSide, label, rightSide))
 		}
 
 		timeStr := ""
