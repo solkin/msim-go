@@ -68,7 +68,56 @@ func (db *DB) init() error {
 		}
 	}
 
+	// Auto-migration for new columns
+	if err := db.migrate(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// migrate performs auto-migration for new columns
+func (db *DB) migrate() error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	// Check and add last_online column to users table
+	if !db.columnExists("users", "last_online") {
+		// SQLite doesn't support parameters in ALTER TABLE, use string concatenation
+		alterQuery := "ALTER TABLE users ADD COLUMN last_online TEXT DEFAULT '" + now + "'"
+		if _, err := db.conn.Exec(alterQuery); err != nil {
+			return err
+		}
+		// Set current time for existing users
+		if _, err := db.conn.Exec("UPDATE users SET last_online = ? WHERE last_online IS NULL", now); err != nil {
+			return err
+		}
+	}
+
+	// Check and add last_offline column to users table
+	if !db.columnExists("users", "last_offline") {
+		// SQLite doesn't support parameters in ALTER TABLE, use string concatenation
+		alterQuery := "ALTER TABLE users ADD COLUMN last_offline TEXT DEFAULT '" + now + "'"
+		if _, err := db.conn.Exec(alterQuery); err != nil {
+			return err
+		}
+		// Set current time for existing users
+		if _, err := db.conn.Exec("UPDATE users SET last_offline = ? WHERE last_offline IS NULL", now); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// columnExists checks if a column exists in a table
+func (db *DB) columnExists(table, column string) bool {
+	query := "SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?"
+	var count int
+	err := db.conn.QueryRow(query, table, column).Scan(&count)
+	if err != nil {
+		return false
+	}
+	return count > 0
 }
 
 // User methods
@@ -78,8 +127,50 @@ func (db *DB) CreateUser(login, password string) error {
 		return err
 	}
 
-	_, err = db.conn.Exec("INSERT INTO users (login, password) VALUES (?, ?)", login, string(hashed))
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = db.conn.Exec(
+		"INSERT INTO users (login, password, last_online, last_offline) VALUES (?, ?, ?, ?)",
+		login, string(hashed), now, now,
+	)
 	return err
+}
+
+// UpdateLastOnline updates user's last online timestamp
+func (db *DB) UpdateLastOnline(login string, t time.Time) error {
+	_, err := db.conn.Exec(
+		"UPDATE users SET last_online = ? WHERE login = ?",
+		t.Format(time.RFC3339), login,
+	)
+	return err
+}
+
+// UpdateLastOffline updates user's last offline timestamp
+func (db *DB) UpdateLastOffline(login string, t time.Time) error {
+	_, err := db.conn.Exec(
+		"UPDATE users SET last_offline = ? WHERE login = ?",
+		t.Format(time.RFC3339), login,
+	)
+	return err
+}
+
+// GetUserStatus returns user's online status timestamps
+func (db *DB) GetUserStatus(login string) (lastOnline, lastOffline time.Time, err error) {
+	var onlineStr, offlineStr string
+	err = db.conn.QueryRow(
+		"SELECT COALESCE(last_online, ''), COALESCE(last_offline, '') FROM users WHERE login = ?",
+		login,
+	).Scan(&onlineStr, &offlineStr)
+	if err != nil {
+		return
+	}
+
+	if onlineStr != "" {
+		lastOnline, _ = time.Parse(time.RFC3339, onlineStr)
+	}
+	if offlineStr != "" {
+		lastOffline, _ = time.Parse(time.RFC3339, offlineStr)
+	}
+	return
 }
 
 func (db *DB) AuthenticateUser(login, password string) (bool, error) {
@@ -233,5 +324,51 @@ func (db *DB) ClearHistory(owner, contact string) error {
 		owner, contact, contact, owner,
 	)
 	return err
+}
+
+// GetOfflineMessageCounts returns count of messages received between user's last offline and last online time, grouped by sender
+func (db *DB) GetOfflineMessageCounts(recipient string) (map[string]int, error) {
+	// Get user's last offline and last online times
+	var lastOfflineStr, lastOnlineStr string
+	err := db.conn.QueryRow(
+		"SELECT COALESCE(last_offline, ''), COALESCE(last_online, '') FROM users WHERE login = ?",
+		recipient,
+	).Scan(&lastOfflineStr, &lastOnlineStr)
+	if err != nil {
+		return nil, err
+	}
+
+	// Default to very old time if not set
+	if lastOfflineStr == "" {
+		lastOfflineStr = "1970-01-01T00:00:00Z"
+	}
+	if lastOnlineStr == "" {
+		lastOnlineStr = "2099-12-31T23:59:59Z"
+	}
+
+	// Count messages received between last_offline and last_online, grouped by sender
+	query := `
+		SELECT sender, COUNT(*) 
+		FROM messages 
+		WHERE recipient = ? AND timestamp > ? AND timestamp <= ?
+		GROUP BY sender
+	`
+	rows, err := db.conn.Query(query, recipient, lastOfflineStr, lastOnlineStr)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int)
+	for rows.Next() {
+		var sender string
+		var count int
+		if err := rows.Scan(&sender, &count); err != nil {
+			return nil, err
+		}
+		counts[sender] = count
+	}
+
+	return counts, rows.Err()
 }
 

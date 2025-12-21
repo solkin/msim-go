@@ -58,7 +58,13 @@ func (s *Server) handleAuth(session *Session, pkt *protocol.Packet, conn net.Con
 	session.Login = login
 	s.addSession(login, session)
 	s.sendOK(conn, "auth")
-	s.notifyContactsOnline(login)
+
+	// Обновляем время последнего подключения
+	now := time.Now().UTC()
+	if err := s.db.UpdateLastOnline(login, now); err != nil {
+		log.Printf("Failed to update last_online for %s: %v", login, err)
+	}
+	s.notifyContactsOnline(login, now)
 }
 
 func (s *Server) handleRegister(session *Session, pkt *protocol.Packet, conn net.Conn) {
@@ -351,13 +357,30 @@ func (s *Server) handleStatus(session *Session, pkt *protocol.Packet, conn net.C
 			return
 		}
 
-		// Проверяем статус пользователя
+		// Проверяем статус пользователя и получаем last_seen
 		status := "off"
+		var lastSeen time.Time
 		if _, ok := s.getSession(targetUser); ok {
 			status = "on"
 		}
-		// Формат: user|status (| не экранируется внутри списка)
-		item := protocol.Escape(targetUser) + "|" + status
+
+		// Получаем время последнего изменения статуса
+		lastOnline, lastOffline, err := s.db.GetUserStatus(targetUser)
+		if err != nil {
+			log.Printf("Status error getting user status: %v", err)
+			s.sendError(conn, "stat", "Internal error")
+			return
+		}
+
+		// last_seen - большее из last_online и last_offline
+		if lastOnline.After(lastOffline) {
+			lastSeen = lastOnline
+		} else {
+			lastSeen = lastOffline
+		}
+
+		// Формат: user|status|last_seen (| не экранируется внутри списка)
+		item := protocol.Escape(targetUser) + "|" + status + "|" + lastSeen.Format(time.RFC3339)
 		items = append(items, item)
 	} else {
 		// Запрос статусов всех контактов
@@ -370,17 +393,33 @@ func (s *Server) handleStatus(session *Session, pkt *protocol.Packet, conn net.C
 
 		for _, contact := range contacts {
 			status := "off"
+			var lastSeen time.Time
 			if _, ok := s.getSession(contact.Contact); ok {
 				status = "on"
 			}
-			// Формат: user|status (| не экранируется внутри списка)
-			item := protocol.Escape(contact.Contact) + "|" + status
+
+			// Получаем время последнего изменения статуса
+			lastOnline, lastOffline, err := s.db.GetUserStatus(contact.Contact)
+			if err != nil {
+				log.Printf("Status error getting contact status: %v", err)
+				continue // Пропускаем контакт при ошибке
+			}
+
+			// last_seen - большее из last_online и last_offline
+			if lastOnline.After(lastOffline) {
+				lastSeen = lastOnline
+			} else {
+				lastSeen = lastOffline
+			}
+
+			// Формат: user|status|last_seen (| не экранируется внутри списка)
+			item := protocol.Escape(contact.Contact) + "|" + status + "|" + lastSeen.Format(time.RFC3339)
 			items = append(items, item)
 		}
 	}
 
 	response := strings.Join(items, ",")
-	// response содержит user|status, где | не должен экранироваться
+	// response содержит user|status|last_seen, где | не должен экранироваться
 	s.sendPacketRaw(conn, "stat", response)
 }
 
@@ -547,28 +586,30 @@ func (s *Server) handleDeleteContact(session *Session, pkt *protocol.Packet, con
 	s.sendOK(conn, "del")
 }
 
-func (s *Server) notifyContactsOnline(login string) {
+func (s *Server) notifyContactsOnline(login string, timestamp time.Time) {
 	contacts, err := s.db.GetContacts(login)
 	if err != nil {
 		return
 	}
 
+	ts := timestamp.Format(time.RFC3339)
 	for _, contact := range contacts {
 		if conn, ok := s.getSessionConn(contact.Contact); ok {
-			s.sendPacket(conn, "on", login)
+			s.sendPacket(conn, "on", login, ts)
 		}
 	}
 }
 
-func (s *Server) notifyContactsOffline(login string) {
+func (s *Server) notifyContactsOffline(login string, timestamp time.Time) {
 	contacts, err := s.db.GetContacts(login)
 	if err != nil {
 		return
 	}
 
+	ts := timestamp.Format(time.RFC3339)
 	for _, contact := range contacts {
 		if conn, ok := s.getSessionConn(contact.Contact); ok {
-			s.sendPacket(conn, "off", login)
+			s.sendPacket(conn, "off", login, ts)
 		}
 	}
 }
@@ -582,7 +623,13 @@ func (s *Server) handleBye(session *Session, pkt *protocol.Packet, conn net.Conn
 	if session.Login != "" {
 		remoteAddr := conn.RemoteAddr().String()
 		s.removeSession(session.Login)
-		s.notifyContactsOffline(session.Login)
+
+		// Обновляем время последнего отключения
+		now := time.Now().UTC()
+		if err := s.db.UpdateLastOffline(session.Login, now); err != nil {
+			log.Printf("Failed to update last_offline for %s: %v", session.Login, err)
+		}
+		s.notifyContactsOffline(session.Login, now)
 		log.Printf("Client %s disconnected (bye) from %s", session.Login, remoteAddr)
 	}
 
@@ -606,10 +653,15 @@ func (s *Server) Shutdown(reason string, completionTime time.Time) {
 		details = completionTime.UTC().Format("2006-01-02T15:04:05Z")
 	}
 
+	now := time.Now().UTC()
 	for _, sess := range sessions {
 		s.sendBye(sess.Conn, reason, details)
 		sess.Conn.Close()
 		if sess.Login != "" {
+			// Обновляем время последнего отключения
+			if err := s.db.UpdateLastOffline(sess.Login, now); err != nil {
+				log.Printf("Failed to update last_offline for %s: %v", sess.Login, err)
+			}
 			s.removeSession(sess.Login)
 		}
 	}
@@ -625,6 +677,7 @@ func (s *Server) handleHelp(conn net.Conn) {
 		"ack",
 		"hist",
 		"hclear",
+		"offmsg",
 		"stat",
 		"list",
 		"add",
@@ -637,4 +690,29 @@ func (s *Server) handleHelp(conn net.Conn) {
 	response := strings.Join(commands, ",")
 	// response содержит список команд через запятую, запятые не должны экранироваться
 	s.sendPacketRaw(conn, "help", response)
+}
+
+func (s *Server) handleOfflineMessages(session *Session, conn net.Conn) {
+	if session.Login == "" {
+		s.sendError(conn, "offmsg", "Not authenticated")
+		return
+	}
+
+	counts, err := s.db.GetOfflineMessageCounts(session.Login)
+	if err != nil {
+		log.Printf("Offmsg error: %v", err)
+		s.sendError(conn, "offmsg", "Internal error")
+		return
+	}
+
+	var items []string
+	for sender, count := range counts {
+		// Формат: contact|count (| не экранируется внутри списка)
+		item := protocol.Escape(sender) + "|" + strconv.Itoa(count)
+		items = append(items, item)
+	}
+
+	response := strings.Join(items, ",")
+	// response содержит contact|count, где | не должен экранироваться
+	s.sendPacketRaw(conn, "offmsg", response)
 }

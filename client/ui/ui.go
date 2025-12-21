@@ -36,6 +36,9 @@ type App struct {
 	currentPass      string
 	contacts         []protocol.Contact
 	statuses         map[string]bool
+	statusLastSeen   map[string]string // last seen timestamp per contact
+	unreadCounts     map[string]int    // unread message count per contact
+	unreadMarker     int               // position of unread marker in current chat (messages before this are read)
 	messages         map[string][]protocol.Message
 	currentChat      string
 	mu               sync.RWMutex
@@ -51,9 +54,11 @@ type App struct {
 // NewApp creates a new application instance
 func NewApp(serverAddr string) *App {
 	return &App{
-		serverAddr: serverAddr,
-		statuses:   make(map[string]bool),
-		messages:   make(map[string][]protocol.Message),
+		serverAddr:     serverAddr,
+		statuses:       make(map[string]bool),
+		statusLastSeen: make(map[string]string),
+		unreadCounts:   make(map[string]int),
+		messages:       make(map[string][]protocol.Message),
 	}
 }
 
@@ -300,6 +305,7 @@ func (a *App) setupHandlers() {
 					break
 				}
 			}
+			currentChat := a.currentChat
 			a.mu.RUnlock()
 
 			// Add unknown sender to contacts
@@ -321,6 +327,10 @@ func (a *App) setupHandlers() {
 				Timestamp: timestamp,
 				Status:    "ackn",
 			})
+			// Increment unread count if not in current chat with this sender
+			if currentChat != sender {
+				a.unreadCounts[sender]++
+			}
 			a.mu.Unlock()
 
 			// Update UI if chat is open
@@ -365,6 +375,9 @@ func (a *App) setupHandlers() {
 			userID := parts[1]
 			a.mu.Lock()
 			a.statuses[userID] = true
+			if len(parts) >= 3 {
+				a.statusLastSeen[userID] = parts[2]
+			}
 			a.mu.Unlock()
 			a.app.QueueUpdateDraw(func() {
 				a.updateContactsList()
@@ -381,6 +394,9 @@ func (a *App) setupHandlers() {
 			userID := parts[1]
 			a.mu.Lock()
 			a.statuses[userID] = false
+			if len(parts) >= 3 {
+				a.statusLastSeen[userID] = parts[2]
+			}
 			a.mu.Unlock()
 			a.app.QueueUpdateDraw(func() {
 				a.updateContactsList()
@@ -431,9 +447,10 @@ func (a *App) showMainScreen() {
 	a.updateConnectionStatus()
 	a.updateStatusBarText()
 
-	// Load contacts and statuses
+	// Load contacts, statuses and offline messages
 	a.loadContacts()
 	a.loadStatuses()
+	a.loadOfflineMessages()
 
 	// Focus on contacts list
 	a.app.SetFocus(a.contactsList)
@@ -615,6 +632,13 @@ func (a *App) resetAllStatuses() {
 	for k := range a.statuses {
 		a.statuses[k] = false
 	}
+	// Also reset unread counts and last seen on disconnect
+	for k := range a.unreadCounts {
+		delete(a.unreadCounts, k)
+	}
+	for k := range a.statusLastSeen {
+		delete(a.statusLastSeen, k)
+	}
 	a.mu.Unlock()
 }
 
@@ -686,6 +710,7 @@ func (a *App) reconnect() {
 				a.updateStatusBarText()
 				a.loadContacts()
 				a.loadStatuses()
+				a.loadOfflineMessages()
 			} else {
 				a.setConnectionError(authError)
 				a.client.Disconnect()
@@ -740,7 +765,7 @@ func (a *App) loadContacts() {
 
 func (a *App) loadStatuses() {
 	handler := func(parts []string) {
-		// Format: stat|<raw content with user|status,...>
+		// Format: stat|<raw content with user|status|last_seen,...>
 		// parts[0] = "stat", parts[1] = raw content
 		if len(parts) >= 1 && parts[0] == protocol.TypeStat {
 			content := ""
@@ -751,6 +776,9 @@ func (a *App) loadStatuses() {
 			a.mu.Lock()
 			for _, s := range statuses {
 				a.statuses[s.UserID] = s.Online
+				if s.LastSeen != "" {
+					a.statusLastSeen[s.UserID] = s.LastSeen
+				}
 			}
 			a.mu.Unlock()
 			a.app.QueueUpdateDraw(func() {
@@ -761,6 +789,31 @@ func (a *App) loadStatuses() {
 
 	a.client.OnPacket(protocol.TypeStat, handler)
 	a.client.GetStatus()
+}
+
+func (a *App) loadOfflineMessages() {
+	handler := func(parts []string) {
+		// Format: offmsg|<raw content with contact|count,...>
+		// parts[0] = "offmsg", parts[1] = raw content
+		if len(parts) >= 1 && parts[0] == protocol.TypeOffmsg {
+			content := ""
+			if len(parts) >= 2 {
+				content = parts[1]
+			}
+			counts := protocol.ParseOfflineMessages(content)
+			a.mu.Lock()
+			for _, c := range counts {
+				a.unreadCounts[c.ContactID] = c.Count
+			}
+			a.mu.Unlock()
+			a.app.QueueUpdateDraw(func() {
+				a.updateContactsList()
+			})
+		}
+	}
+
+	a.client.OnPacket(protocol.TypeOffmsg, handler)
+	a.client.GetOfflineMessages()
 }
 
 func (a *App) updateContactsList() {
@@ -780,10 +833,20 @@ func (a *App) updateContactsList() {
 		}
 
 		var mainText string
+		unread := a.unreadCounts[contact.ID]
+
 		if a.statuses[contact.ID] {
-			mainText = fmt.Sprintf("[green]●[white] %s [gray](%s)", nick, contact.ID)
+			if unread > 0 {
+				mainText = fmt.Sprintf("[green]●[white] %s [gray](%s) [red](%d)", nick, contact.ID, unread)
+			} else {
+				mainText = fmt.Sprintf("[green]●[white] %s [gray](%s)", nick, contact.ID)
+			}
 		} else {
-			mainText = fmt.Sprintf("[gray]○[white] %s [gray](%s)", nick, contact.ID)
+			if unread > 0 {
+				mainText = fmt.Sprintf("[gray]○[white] %s [gray](%s) [red](%d)", nick, contact.ID, unread)
+			} else {
+				mainText = fmt.Sprintf("[gray]○[white] %s [gray](%s)", nick, contact.ID)
+			}
 		}
 
 		a.contactsList.AddItem(mainText, "", 0, nil)
@@ -795,10 +858,21 @@ func (a *App) updateContactsList() {
 }
 
 func (a *App) openChat(contactID string) {
+	a.mu.Lock()
 	a.currentChat = contactID
+	// Store unread count for marker calculation after history loads
+	unreadCount := a.unreadCounts[contactID]
+	a.unreadMarker = unreadCount // Temporarily store count, will be converted to position after history loads
+	// Reset unread count when opening chat
+	a.unreadCounts[contactID] = 0
+	a.mu.Unlock()
+
 	chatPage := a.createChatPage(contactID)
 	a.pages.AddPage("chat", chatPage, true, true)
 	a.pages.SwitchToPage("chat")
+
+	// Update contacts list to reflect cleared unread count
+	a.updateContactsList()
 
 	// Load history
 	a.loadHistory(contactID)
@@ -959,6 +1033,13 @@ func (a *App) loadHistory(contactID string) {
 			messages := protocol.ParseHistory(content)
 			a.mu.Lock()
 			a.messages[contactID] = messages
+			// Calculate unread marker position from stored unread count
+			unreadCount := a.unreadMarker
+			if unreadCount > 0 && unreadCount <= len(messages) {
+				a.unreadMarker = len(messages) - unreadCount
+			} else {
+				a.unreadMarker = -1 // No marker
+			}
 			a.mu.Unlock()
 			a.app.QueueUpdateDraw(func() {
 				a.refreshChatView()
@@ -977,12 +1058,18 @@ func (a *App) refreshChatView() {
 
 	a.mu.RLock()
 	messages := a.messages[a.currentChat]
+	unreadMarker := a.unreadMarker
 	a.mu.RUnlock()
 
 	a.chatView.Clear()
 	var sb strings.Builder
 
-	for _, msg := range messages {
+	for i, msg := range messages {
+		// Insert unread marker before unread messages
+		if unreadMarker >= 0 && i == unreadMarker {
+			sb.WriteString("[red]────────── Unread ──────────[-]\n")
+		}
+
 		timeStr := ""
 		if len(msg.Timestamp) >= 19 {
 			timeStr = msg.Timestamp[11:19] // Extract HH:MM:SS
@@ -1030,7 +1117,10 @@ func (a *App) sendMessage(contactID, text string) {
 }
 
 func (a *App) closeChat() {
+	a.mu.Lock()
 	a.currentChat = ""
+	a.unreadMarker = -1 // Reset marker when closing chat
+	a.mu.Unlock()
 	a.chatView = nil
 	a.messageInput = nil
 	a.pages.RemovePage("chat")

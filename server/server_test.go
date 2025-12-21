@@ -635,9 +635,9 @@ func TestStatus(t *testing.T) {
 		t.Fatalf("Failed to read response: %v", err)
 	}
 
-	expected := "stat|user2@example.com|on"
-	if response != expected {
-		t.Errorf("Expected %q, got %q", expected, response)
+	// Проверяем формат: stat|user|status|timestamp
+	if !strings.HasPrefix(response, "stat|user2@example.com|on|") {
+		t.Errorf("Expected response to start with 'stat|user2@example.com|on|', got %q", response)
 	}
 }
 
@@ -1161,9 +1161,9 @@ func TestStatusSpecificUser(t *testing.T) {
 		t.Fatalf("Failed to read response: %v", err)
 	}
 
-	expected := "stat|user2@example.com|off"
-	if response != expected {
-		t.Errorf("Expected %q, got %q", expected, response)
+	// Проверяем формат: stat|user|status|timestamp
+	if !strings.HasPrefix(response, "stat|user2@example.com|off|") {
+		t.Errorf("Expected response to start with 'stat|user2@example.com|off|', got %q", response)
 	}
 }
 

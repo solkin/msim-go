@@ -165,7 +165,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 	// Удаляем сессию при отключении (если не было bye)
 	if session.Login != "" {
 		s.removeSession(session.Login)
-		s.notifyContactsOffline(session.Login)
+
+		// Обновляем время последнего отключения
+		now := time.Now().UTC()
+		if err := s.db.UpdateLastOffline(session.Login, now); err != nil {
+			log.Printf("Failed to update last_offline for %s: %v", session.Login, err)
+		}
+		s.notifyContactsOffline(session.Login, now)
 		log.Printf("Client %s disconnected from %s", session.Login, remoteAddr)
 	} else {
 		log.Printf("Client disconnected from %s", remoteAddr)
@@ -192,6 +198,8 @@ func (s *Server) handlePacket(session *Session, pkt *protocol.Packet, conn net.C
 		s.handleHistory(session, pkt, conn)
 	case "hclear":
 		s.handleClearHistory(session, pkt, conn)
+	case "offmsg":
+		s.handleOfflineMessages(session, conn)
 	case "stat":
 		s.handleStatus(session, pkt, conn)
 	case "list":

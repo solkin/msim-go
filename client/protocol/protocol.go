@@ -30,6 +30,7 @@ const (
 	TypeDel    = "del"
 	TypeOn     = "on"
 	TypeOff    = "off"
+	TypeOffmsg = "offmsg"
 )
 
 // Contact represents a contact with id and nickname
@@ -48,8 +49,9 @@ type Message struct {
 
 // Status represents user online status
 type Status struct {
-	UserID string
-	Online bool
+	UserID   string
+	Online   bool
+	LastSeen string // ISO 8601 timestamp of last status change
 }
 
 // Client represents an mSIM protocol client
@@ -172,8 +174,8 @@ func (c *Client) readLoop() {
 		if strings.HasPrefix(line, TypeHist+"|") {
 			// hist|contact|<raw content with unescaped pipes>
 			parts = splitPacketN(line, 3)
-		} else if strings.HasPrefix(line, TypeStat+"|") || strings.HasPrefix(line, TypeList+"|") {
-			// stat|<raw content> or list|<raw content>
+		} else if strings.HasPrefix(line, TypeStat+"|") || strings.HasPrefix(line, TypeList+"|") || strings.HasPrefix(line, TypeOffmsg+"|") {
+			// stat|<raw content> or list|<raw content> or offmsg|<raw content>
 			parts = splitPacketN(line, 2)
 		} else {
 			parts = splitPacket(line)
@@ -450,6 +452,7 @@ func ParseContacts(content string) []Contact {
 }
 
 // ParseStatuses parses status response
+// Format: user|status|last_seen (last_seen is optional for backwards compatibility)
 func ParseStatuses(content string) []Status {
 	if content == "" {
 		return nil
@@ -459,13 +462,52 @@ func ParseStatuses(content string) []Status {
 	for _, item := range items {
 		parts := splitPacket(item)
 		if len(parts) >= 2 {
-			statuses = append(statuses, Status{
+			s := Status{
 				UserID: parts[0],
 				Online: parts[1] == "on",
-			})
+			}
+			if len(parts) >= 3 {
+				s.LastSeen = parts[2]
+			}
+			statuses = append(statuses, s)
 		}
 	}
 	return statuses
+}
+
+// OfflineMessageCount represents count of offline messages from a contact
+type OfflineMessageCount struct {
+	ContactID string
+	Count     int
+}
+
+// ParseOfflineMessages parses offmsg response
+// Format: contact|count,contact|count,...
+func ParseOfflineMessages(content string) []OfflineMessageCount {
+	if content == "" {
+		return nil
+	}
+	items := SplitList(content)
+	var counts []OfflineMessageCount
+	for _, item := range items {
+		parts := splitPacket(item)
+		if len(parts) >= 2 {
+			count := 0
+			fmt.Sscanf(parts[1], "%d", &count)
+			if count > 0 {
+				counts = append(counts, OfflineMessageCount{
+					ContactID: parts[0],
+					Count:     count,
+				})
+			}
+		}
+	}
+	return counts
+}
+
+// GetOfflineMessages requests offline messages count
+func (c *Client) GetOfflineMessages() error {
+	return c.Send(TypeOffmsg)
 }
 
 // ParseHistory parses history response content
