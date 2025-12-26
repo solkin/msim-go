@@ -1,5 +1,8 @@
 # Binaries
 msim-server
+client/msim-chat
+client/msim-client
+client/msim-server
 *.exe
 *.exe~
 *.dll
