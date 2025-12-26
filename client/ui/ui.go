@@ -595,6 +595,7 @@ func (a *App) startStatusTicker() {
 				if a.client != nil && a.client.IsConnected() {
 					a.app.QueueUpdateDraw(func() {
 						a.updateConnectionStatus()
+						a.updateContactsList() // Refresh last seen times
 					})
 				}
 			}
@@ -817,6 +818,46 @@ func (a *App) loadOfflineMessages() {
 	a.client.GetOfflineMessages()
 }
 
+// formatLastSeen formats the last seen timestamp for display
+func (a *App) formatLastSeen(timestamp string) string {
+	if timestamp == "" {
+		return ""
+	}
+
+	// Parse ISO 8601 timestamp
+	t, err := time.Parse(time.RFC3339, timestamp)
+	if err != nil {
+		return ""
+	}
+
+	now := time.Now()
+	diff := now.Sub(t)
+
+	if diff < time.Minute {
+		return "just now"
+	} else if diff < time.Hour {
+		mins := int(diff.Minutes())
+		if mins == 1 {
+			return "1 min ago"
+		}
+		return fmt.Sprintf("%d min ago", mins)
+	} else if diff < 24*time.Hour {
+		hours := int(diff.Hours())
+		if hours == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", hours)
+	} else if diff < 30*24*time.Hour {
+		days := int(diff.Hours() / 24)
+		if days == 1 {
+			return "1 day ago"
+		}
+		return fmt.Sprintf("%d days ago", days)
+	} else {
+		return t.Format("Jan 2, 2006")
+	}
+}
+
 func (a *App) updateContactsList() {
 	if a.contactsList == nil {
 		return
@@ -843,10 +884,18 @@ func (a *App) updateContactsList() {
 				mainText = fmt.Sprintf("[green]●[white] %s [gray](%s)", nick, contact.ID)
 			}
 		} else {
+			// Format last seen for offline users
+			lastSeenStr := ""
+			if ts := a.statusLastSeen[contact.ID]; ts != "" {
+				if formatted := a.formatLastSeen(ts); formatted != "" {
+					lastSeenStr = fmt.Sprintf(" [gray]— %s", formatted)
+				}
+			}
+
 			if unread > 0 {
-				mainText = fmt.Sprintf("[gray]○[white] %s [gray](%s) [red](%d)", nick, contact.ID, unread)
+				mainText = fmt.Sprintf("[gray]○[white] %s [gray](%s)%s [red](%d)", nick, contact.ID, lastSeenStr, unread)
 			} else {
-				mainText = fmt.Sprintf("[gray]○[white] %s [gray](%s)", nick, contact.ID)
+				mainText = fmt.Sprintf("[gray]○[white] %s [gray](%s)%s", nick, contact.ID, lastSeenStr)
 			}
 		}
 
