@@ -1108,6 +1108,34 @@ func (a *App) loadHistory(contactID string) {
 	a.client.GetHistory(contactID)
 }
 
+// formatDateSeparator formats a date for display as a separator
+func (a *App) formatDateSeparator(timestamp string) string {
+	if len(timestamp) < 10 {
+		return ""
+	}
+
+	// Parse the date part (YYYY-MM-DD)
+	t, err := time.Parse("2006-01-02", timestamp[:10])
+	if err != nil {
+		return timestamp[:10]
+	}
+
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	yesterday := today.AddDate(0, 0, -1)
+	msgDate := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, now.Location())
+
+	if msgDate.Equal(today) {
+		return "Today"
+	} else if msgDate.Equal(yesterday) {
+		return "Yesterday"
+	} else if msgDate.Year() == now.Year() {
+		return t.Format("January 2")
+	} else {
+		return t.Format("January 2, 2006")
+	}
+}
+
 func (a *App) refreshChatView() {
 	if a.chatView == nil {
 		return
@@ -1126,8 +1154,27 @@ func (a *App) refreshChatView() {
 
 	a.chatView.Clear()
 	var sb strings.Builder
+	var lastDate string
 
 	for i, msg := range messages {
+		// Extract date from timestamp (YYYY-MM-DD)
+		msgDate := ""
+		if len(msg.Timestamp) >= 10 {
+			msgDate = msg.Timestamp[:10]
+		}
+
+		// Insert date separator when date changes
+		if msgDate != "" && msgDate != lastDate {
+			dateLabel := a.formatDateSeparator(msg.Timestamp)
+			// Center the date label
+			padding := (width - len(dateLabel)) / 2
+			if padding < 0 {
+				padding = 0
+			}
+			sb.WriteString(fmt.Sprintf("[gray]%s%s[-]\n", strings.Repeat(" ", padding), dateLabel))
+			lastDate = msgDate
+		}
+
 		// Insert unread marker before unread messages
 		if unreadMarker >= 0 && i == unreadMarker {
 			// Create full-width separator with "Unread" in the middle
