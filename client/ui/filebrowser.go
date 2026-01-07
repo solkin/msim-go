@@ -91,6 +91,8 @@ func (a *App) showFileBrowser(mode FileBrowserMode, initialPath string, filename
 	statusText.SetTextAlign(tview.AlignCenter)
 	if mode == FileBrowserModeSave {
 		statusText.SetText(" Enter:Select | Tab:Switch | Esc:Cancel ")
+	} else if mode == FileBrowserModeDirectory {
+		statusText.SetText(" Enter:Open/Select | Backspace:Up | Esc:Cancel ")
 	} else {
 		statusText.SetText(" Enter:Select | Backspace:Up | Esc:Cancel ")
 	}
@@ -103,6 +105,11 @@ func (a *App) showFileBrowser(mode FileBrowserMode, initialPath string, filename
 		}
 
 		fileList.Clear()
+
+		// Add "select current directory" entry for directory mode
+		if mode == FileBrowserModeDirectory {
+			fileList.AddItem("✓ [Select this directory]", "", 0, nil)
+		}
 
 		// Add parent directory entry
 		if dir != "/" {
@@ -184,6 +191,13 @@ func (a *App) showFileBrowser(mode FileBrowserMode, initialPath string, filename
 
 	// Handle selection
 	fileList.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
+		// Handle "select current directory" option
+		if strings.HasPrefix(mainText, "✓ ") {
+			a.pages.RemovePage("filebrowser")
+			callback(FileBrowserResult{Selected: true, Path: currentDir})
+			return
+		}
+
 		entryName := getEntryName(mainText)
 
 		if entryName == ".." {
@@ -198,15 +212,9 @@ func (a *App) showFileBrowser(mode FileBrowserMode, initialPath string, filename
 		fullPath := filepath.Join(currentDir, entryName)
 
 		if isDirectory(mainText) {
-			if mode == FileBrowserModeDirectory {
-				// Select this directory
-				a.pages.RemovePage("filebrowser")
-				callback(FileBrowserResult{Selected: true, Path: fullPath})
-			} else {
-				// Enter directory
-				if err := populateList(fullPath); err != nil {
-					statusText.SetText(fmt.Sprintf(" Error: %v ", err))
-				}
+			// In directory mode, Enter on a directory enters it (use "Select this directory" to select current)
+			if err := populateList(fullPath); err != nil {
+				statusText.SetText(fmt.Sprintf(" Error: %v ", err))
 			}
 		} else {
 			// File selected

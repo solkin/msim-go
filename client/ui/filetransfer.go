@@ -538,10 +538,12 @@ func (a *App) showReceiveFileDialog(sender, filename string, size int64, hash, s
 	form.SetButtonTextColor(ColorTitle)
 
 	form.AddButton("Change", func() {
-		a.showFileBrowser(FileBrowserModeSave, filepath.Dir(pathInput.GetText()), filename, func(result FileBrowserResult) {
+		a.showFileBrowser(FileBrowserModeDirectory, filepath.Dir(pathInput.GetText()), "", func(result FileBrowserResult) {
 			if result.Selected {
-				pathInput.SetText(result.Path)
-				transfer.SavePath = result.Path
+				// Append filename to selected directory
+				newPath := filepath.Join(result.Path, filename)
+				pathInput.SetText(newPath)
+				transfer.SavePath = newPath
 			}
 			a.app.SetFocus(form)
 		})
@@ -582,8 +584,7 @@ func (a *App) showReceiveFileDialog(sender, filename string, size int64, hash, s
 		AddItem(contentView, 4, 0, false).
 		AddItem(pathInput, 1, 0, false).
 		AddItem(nil, 1, 0, false).
-		AddItem(form, 1, 0, true).
-		AddItem(nil, 1, 0, false).
+		AddItem(form, 3, 0, true).
 		AddItem(expiresLabel, 1, 0, false)
 	innerFlex.SetBackgroundColor(ColorBg)
 	innerFlex.SetBorder(true)
@@ -595,8 +596,8 @@ func (a *App) showReceiveFileDialog(sender, filename string, size int64, hash, s
 		AddItem(nil, 0, 1, false).
 		AddItem(tview.NewFlex().
 			AddItem(nil, 0, 1, false).
-			AddItem(innerFlex, 50, 0, true).
-			AddItem(nil, 0, 1, false), 12, 0, true).
+			AddItem(innerFlex, 55, 0, true).
+			AddItem(nil, 0, 1, false), 14, 0, true).
 		AddItem(nil, 0, 1, false)
 	mainFlex.SetBackgroundColor(ColorBg)
 
