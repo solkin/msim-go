@@ -685,6 +685,11 @@ func (s *Server) handleHelp(conn net.Conn) {
 		"del",
 		"bye",
 		"help",
+		"fsnd",
+		"facc",
+		"fdec",
+		"fcan",
+		"fst",
 	}
 
 	response := strings.Join(commands, ",")
@@ -715,4 +720,325 @@ func (s *Server) handleOfflineMessages(session *Session, conn net.Conn) {
 	response := strings.Join(items, ",")
 	// response содержит contact|count, где | не должен экранироваться
 	s.sendPacketRaw(conn, "offmsg", response)
+}
+
+func (s *Server) handleFileSend(session *Session, pkt *protocol.Packet, conn net.Conn) {
+	if session.Login == "" {
+		s.sendError(conn, "fsnd", "Not authenticated")
+		return
+	}
+
+	// Формат: fsnd|recipient|filename|size|hash
+	var recipient, filename, sizeStr, hash string
+
+	if pkt.Destination != "" {
+		recipient = pkt.Destination
+		// Остальные поля в Content или Fields
+		if len(pkt.Fields) >= 3 {
+			filename = pkt.Fields[0]
+			sizeStr = pkt.Fields[1]
+			hash = pkt.Fields[2]
+		} else {
+			s.sendError(conn, "fsnd", "Invalid format")
+			return
+		}
+	} else {
+		if len(pkt.Fields) < 4 {
+			s.sendError(conn, "fsnd", "Invalid format")
+			return
+		}
+		recipient = pkt.Fields[0]
+		filename = pkt.Fields[1]
+		sizeStr = pkt.Fields[2]
+		hash = pkt.Fields[3]
+	}
+
+	if recipient == "" || filename == "" || sizeStr == "" {
+		s.sendError(conn, "fsnd", "Invalid data")
+		return
+	}
+
+	// Проверяем, существует ли получатель
+	exists, err := s.db.UserExists(recipient)
+	if err != nil {
+		log.Printf("File send error: %v", err)
+		s.sendError(conn, "fsnd", "Internal error")
+		return
+	}
+
+	if !exists {
+		s.sendError(conn, "fsnd", "Recipient not found")
+		return
+	}
+
+	// Парсим размер
+	size, err := strconv.ParseInt(sizeStr, 10, 64)
+	if err != nil {
+		s.sendError(conn, "fsnd", "Invalid size")
+		return
+	}
+
+	// Создаем сессию передачи файла
+	fileSession, err := s.fileManager.CreateSession(session.Login, recipient, filename, size, hash)
+	if err != nil {
+		log.Printf("File send error: %v", err)
+		s.sendError(conn, "fsnd", "Failed to create session")
+		return
+	}
+
+	// Отправляем отправителю подтверждение с session_id и временем истечения
+	expiresIn := int(fileSession.ExpiresAt.Sub(time.Now()).Seconds())
+	s.sendPacket(conn, "ok", "fsnd", fileSession.ID, strconv.Itoa(expiresIn))
+
+	// Уведомляем получателя
+	if recipientConn, ok := s.getSessionConn(recipient); ok {
+		// Формат: fsnd|sender|filename|size|hash|session_id
+		s.sendPacket(recipientConn, "fsnd", session.Login, filename, sizeStr, hash, fileSession.ID)
+	}
+
+	log.Printf("File send initiated: %s -> %s, file: %s, session: %s", session.Login, recipient, filename, fileSession.ID)
+}
+
+func (s *Server) handleFileAccept(session *Session, pkt *protocol.Packet, conn net.Conn) {
+	if session.Login == "" {
+		s.sendError(conn, "facc", "Not authenticated")
+		return
+	}
+
+	// Формат: facc|sender|session_id
+	var sender, sessionID string
+
+	if pkt.Destination != "" {
+		sender = pkt.Destination
+		if len(pkt.Fields) > 0 {
+			sessionID = pkt.Fields[0]
+		} else {
+			sessionID = pkt.Content
+		}
+	} else {
+		if len(pkt.Fields) < 2 {
+			s.sendError(conn, "facc", "Invalid format")
+			return
+		}
+		sender = pkt.Fields[0]
+		sessionID = pkt.Fields[1]
+	}
+
+	if sessionID == "" {
+		s.sendError(conn, "facc", "Session ID required")
+		return
+	}
+
+	// Получаем сессию
+	fileSession, exists := s.fileManager.GetSession(sessionID)
+	if !exists {
+		s.sendError(conn, "facc", "Session not found")
+		return
+	}
+
+	// Проверяем, что получатель соответствует
+	if fileSession.Recipient != session.Login {
+		s.sendError(conn, "facc", "Not authorized")
+		return
+	}
+
+	// Проверяем отправителя (если указан)
+	if sender != "" && fileSession.Sender != sender {
+		s.sendError(conn, "facc", "Sender mismatch")
+		return
+	}
+
+	// Принимаем файл и выделяем порты
+	uploadPort, downloadPort, err := s.fileManager.AcceptSession(sessionID)
+	if err != nil {
+		log.Printf("File accept error: %v", err)
+		s.sendError(conn, "facc", err.Error())
+		return
+	}
+
+	// Отправляем получателю порт для скачивания
+	s.sendPacket(conn, "ok", "facc", strconv.Itoa(downloadPort))
+
+	// Уведомляем отправителя о принятии и даем порт для загрузки
+	if senderConn, ok := s.getSessionConn(fileSession.Sender); ok {
+		s.sendPacket(senderConn, "facc", session.Login, sessionID, strconv.Itoa(uploadPort))
+	}
+
+	log.Printf("File accept: session %s, upload port %d, download port %d", sessionID, uploadPort, downloadPort)
+}
+
+func (s *Server) handleFileDecline(session *Session, pkt *protocol.Packet, conn net.Conn) {
+	if session.Login == "" {
+		s.sendError(conn, "fdec", "Not authenticated")
+		return
+	}
+
+	// Формат: fdec|sender|session_id|reason
+	var sessionID, reason string
+
+	if pkt.Destination != "" {
+		// sender = pkt.Destination - необязательно для проверки
+		if len(pkt.Fields) >= 1 {
+			sessionID = pkt.Fields[0]
+		}
+		if len(pkt.Fields) >= 2 {
+			reason = pkt.Fields[1]
+		}
+	} else {
+		if len(pkt.Fields) < 2 {
+			s.sendError(conn, "fdec", "Invalid format")
+			return
+		}
+		// sender = pkt.Fields[0] - необязательно для проверки
+		sessionID = pkt.Fields[1]
+		if len(pkt.Fields) >= 3 {
+			reason = pkt.Fields[2]
+		}
+	}
+
+	if sessionID == "" {
+		s.sendError(conn, "fdec", "Session ID required")
+		return
+	}
+
+	// Получаем сессию
+	fileSession, exists := s.fileManager.GetSession(sessionID)
+	if !exists {
+		s.sendError(conn, "fdec", "Session not found")
+		return
+	}
+
+	// Проверяем, что получатель соответствует
+	if fileSession.Recipient != session.Login {
+		s.sendError(conn, "fdec", "Not authorized")
+		return
+	}
+
+	// Отклоняем файл
+	err := s.fileManager.DeclineSession(sessionID)
+	if err != nil {
+		log.Printf("File decline error: %v", err)
+		s.sendError(conn, "fdec", err.Error())
+		return
+	}
+
+	s.sendOK(conn, "fdec")
+
+	// Уведомляем отправителя об отклонении
+	if senderConn, ok := s.getSessionConn(fileSession.Sender); ok {
+		s.sendPacket(senderConn, "fdec", session.Login, sessionID, reason)
+	}
+
+	log.Printf("File declined: session %s, reason: %s", sessionID, reason)
+}
+
+func (s *Server) handleFileCancel(session *Session, pkt *protocol.Packet, conn net.Conn) {
+	if session.Login == "" {
+		s.sendError(conn, "fcan", "Not authenticated")
+		return
+	}
+
+	// Формат: fcan|user|session_id|reason
+	var sessionID, reason string
+
+	if pkt.Destination != "" {
+		// user = pkt.Destination - необязательно для проверки
+		if len(pkt.Fields) >= 1 {
+			sessionID = pkt.Fields[0]
+		}
+		if len(pkt.Fields) >= 2 {
+			reason = pkt.Fields[1]
+		}
+	} else {
+		if len(pkt.Fields) < 2 {
+			s.sendError(conn, "fcan", "Invalid format")
+			return
+		}
+		// user = pkt.Fields[0] - необязательно для проверки
+		sessionID = pkt.Fields[1]
+		if len(pkt.Fields) >= 3 {
+			reason = pkt.Fields[2]
+		}
+	}
+
+	if sessionID == "" {
+		s.sendError(conn, "fcan", "Session ID required")
+		return
+	}
+
+	// Получаем сессию
+	fileSession, exists := s.fileManager.GetSession(sessionID)
+	if !exists {
+		s.sendError(conn, "fcan", "Session not found")
+		return
+	}
+
+	// Проверяем, что пользователь участвует в передаче
+	if fileSession.Sender != session.Login && fileSession.Recipient != session.Login {
+		s.sendError(conn, "fcan", "Not authorized")
+		return
+	}
+
+	// Отменяем передачу
+	err := s.fileManager.CancelSession(sessionID)
+	if err != nil {
+		log.Printf("File cancel error: %v", err)
+		s.sendError(conn, "fcan", err.Error())
+		return
+	}
+
+	s.sendOK(conn, "fcan")
+
+	// Уведомляем другую сторону об отмене
+	var otherUser string
+	if fileSession.Sender == session.Login {
+		otherUser = fileSession.Recipient
+	} else {
+		otherUser = fileSession.Sender
+	}
+
+	if otherConn, ok := s.getSessionConn(otherUser); ok {
+		s.sendPacket(otherConn, "fcan", session.Login, sessionID, reason)
+	}
+
+	log.Printf("File cancelled: session %s by %s, reason: %s", sessionID, session.Login, reason)
+}
+
+func (s *Server) handleFileStatus(session *Session, pkt *protocol.Packet, conn net.Conn) {
+	if session.Login == "" {
+		s.sendError(conn, "fst", "Not authenticated")
+		return
+	}
+
+	// Формат: fst|session_id
+	sessionID := pkt.Destination
+	if sessionID == "" {
+		if len(pkt.Fields) > 0 {
+			sessionID = pkt.Fields[0]
+		} else {
+			sessionID = pkt.Content
+		}
+	}
+
+	if sessionID == "" {
+		s.sendError(conn, "fst", "Session ID required")
+		return
+	}
+
+	// Получаем сессию
+	fileSession, exists := s.fileManager.GetSession(sessionID)
+	if !exists {
+		s.sendError(conn, "fst", "Session not found")
+		return
+	}
+
+	// Проверяем, что пользователь участвует в передаче
+	if fileSession.Sender != session.Login && fileSession.Recipient != session.Login {
+		s.sendError(conn, "fst", "Not authorized")
+		return
+	}
+
+	// Отправляем статус
+	// Формат: fst|session_id|status
+	s.sendPacket(conn, "fst", sessionID, fileSession.Status)
 }

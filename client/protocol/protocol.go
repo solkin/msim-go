@@ -31,6 +31,11 @@ const (
 	TypeOn     = "on"
 	TypeOff    = "off"
 	TypeOffmsg = "offmsg"
+	TypeFsnd   = "fsnd"
+	TypeFacc   = "facc"
+	TypeFdec   = "fdec"
+	TypeFcan   = "fcan"
+	TypeFst    = "fst"
 )
 
 // Contact represents a contact with id and nickname

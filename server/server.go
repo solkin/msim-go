@@ -14,16 +14,19 @@ import (
 )
 
 type Server struct {
-	db       *db.DB
-	config   *ServerConfig
-	sessions map[string]*Session
-	mu       sync.RWMutex
+	db          *db.DB
+	config      *ServerConfig
+	sessions    map[string]*Session
+	mu          sync.RWMutex
+	fileManager *FileTransferManager
 }
 
 type ServerConfig struct {
-	Port         int
-	ReadTimeout  time.Duration
-	WriteTimeout time.Duration
+	Port              int
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	FilePortRangeStart int
+	FilePortRangeEnd   int
 }
 
 type Session struct {
@@ -34,10 +37,22 @@ type Session struct {
 }
 
 func New(database *db.DB, config *ServerConfig) *Server {
+	// Если диапазон портов не задан, используем значения по умолчанию
+	if config.FilePortRangeStart == 0 {
+		config.FilePortRangeStart = 35000
+	}
+	if config.FilePortRangeEnd == 0 {
+		config.FilePortRangeEnd = 35999
+	}
+
+	fileManager := NewFileTransferManager(config.FilePortRangeStart, config.FilePortRangeEnd)
+	fileManager.StartCleanupTask()
+
 	return &Server{
-		db:       database,
-		config:   config,
-		sessions: make(map[string]*Session),
+		db:          database,
+		config:      config,
+		sessions:    make(map[string]*Session),
+		fileManager: fileManager,
 	}
 }
 
@@ -214,6 +229,16 @@ func (s *Server) handlePacket(session *Session, pkt *protocol.Packet, conn net.C
 		s.handleBye(session, pkt, conn)
 	case "help":
 		s.handleHelp(conn)
+	case "fsnd":
+		s.handleFileSend(session, pkt, conn)
+	case "facc":
+		s.handleFileAccept(session, pkt, conn)
+	case "fdec":
+		s.handleFileDecline(session, pkt, conn)
+	case "fcan":
+		s.handleFileCancel(session, pkt, conn)
+	case "fst":
+		s.handleFileStatus(session, pkt, conn)
 	default:
 		s.sendError(conn, "", "Unknown packet type")
 	}

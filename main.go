@@ -26,9 +26,11 @@ func main() {
 	defer database.Close()
 
 	srvConfig := &server.ServerConfig{
-		Port:         cfg.Port,
-		ReadTimeout:  time.Duration(cfg.ReadTimeout) * time.Second,
-		WriteTimeout: time.Duration(cfg.WriteTimeout) * time.Second,
+		Port:               cfg.Port,
+		ReadTimeout:        time.Duration(cfg.ReadTimeout) * time.Second,
+		WriteTimeout:       time.Duration(cfg.WriteTimeout) * time.Second,
+		FilePortRangeStart: cfg.FilePortRangeStart,
+		FilePortRangeEnd:   cfg.FilePortRangeEnd,
 	}
 
 	srv := server.New(database, srvConfig)
