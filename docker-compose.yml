@@ -6,14 +6,14 @@ services:
     container_name: msim-server
     ports:
       - "3215:3215"
-      - "35000-35999:35000-35999"  # Диапазон портов для передачи файлов
+      - "35000-35049:35000-35049"  # Диапазон портов для передачи файлов (50 портов)
     environment:
       - MSIM_PORT=3215
       - MSIM_DB_PATH=/app/data/msim.db
       - MSIM_READ_TIMEOUT=120
       - MSIM_WRITE_TIMEOUT=30
       - MSIM_FILE_PORT_START=35000
-      - MSIM_FILE_PORT_END=35999
+      - MSIM_FILE_PORT_END=35049
     volumes:
       - msim-data:/app/data
       - msim-control:/tmp
