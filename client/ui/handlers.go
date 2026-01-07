@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"time"
 
 	"msim-client/protocol"
@@ -148,4 +149,82 @@ func (a *App) setupHandlers() {
 			a.showDisconnectNotification(reason, details)
 		})
 	})
+
+	// Handle file transfer: ok|fsnd|session_id|expires_in
+	a.client.OnPacket(protocol.TypeOk, func(parts []string) {
+		if len(parts) >= 3 && parts[1] == protocol.TypeFsnd {
+			sessionID := parts[2]
+			expiresIn := 300
+			if len(parts) >= 4 {
+				if exp, err := parseInt(parts[3]); err == nil {
+					expiresIn = exp
+				}
+			}
+			a.handleFileSendResponse(sessionID, expiresIn)
+		}
+		// Handle ok|facc|download_port
+		if len(parts) >= 3 && parts[1] == protocol.TypeFacc {
+			if port, err := parseInt(parts[2]); err == nil {
+				a.handleFileAcceptResponse(port)
+			}
+		}
+	})
+
+	// Handle incoming file: fsnd|sender|filename|size|hash|session_id
+	a.client.OnPacket(protocol.TypeFsnd, func(parts []string) {
+		// Format: fsnd|sender|filename|size|hash|session_id
+		if len(parts) >= 6 {
+			sender := parts[1]
+			filename := parts[2]
+			size := parseFileSize(parts[3])
+			hash := parts[4]
+			sessionID := parts[5]
+			a.handleIncomingFile(sender, filename, size, hash, sessionID)
+		}
+	})
+
+	// Handle file accepted: facc|recipient|session_id|upload_port
+	a.client.OnPacket(protocol.TypeFacc, func(parts []string) {
+		// Format: facc|recipient|session_id|upload_port
+		if len(parts) >= 4 {
+			recipient := parts[1]
+			sessionID := parts[2]
+			if port, err := parseInt(parts[3]); err == nil {
+				a.handleFileAccepted(recipient, sessionID, port)
+			}
+		}
+	})
+
+	// Handle file declined: fdec|user|session_id|reason
+	a.client.OnPacket(protocol.TypeFdec, func(parts []string) {
+		if len(parts) >= 3 {
+			user := parts[1]
+			sessionID := parts[2]
+			reason := ""
+			if len(parts) >= 4 {
+				reason = parts[3]
+			}
+			a.handleFileDeclined(user, sessionID, reason)
+		}
+	})
+
+	// Handle file cancelled: fcan|user|session_id|reason
+	a.client.OnPacket(protocol.TypeFcan, func(parts []string) {
+		if len(parts) >= 3 {
+			user := parts[1]
+			sessionID := parts[2]
+			reason := ""
+			if len(parts) >= 4 {
+				reason = parts[3]
+			}
+			a.handleFileCancelled(user, sessionID, reason)
+		}
+	})
+}
+
+// parseInt parses int from string
+func parseInt(s string) (int, error) {
+	var n int
+	_, err := fmt.Sscanf(s, "%d", &n)
+	return n, err
 }

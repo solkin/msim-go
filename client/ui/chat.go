@@ -98,7 +98,7 @@ func (a *App) createChatPage(contactID string) tview.Primitive {
 	chatStatus.SetBackgroundColor(tcell.NewRGBColor(0, 128, 128))
 	chatStatus.SetTextColor(ColorTitle)
 	chatStatus.SetTextAlign(tview.AlignCenter)
-	chatStatus.SetText(" Enter:Send | Tab:Scroll | F5:Refresh | F8:Clear | Esc:Back ")
+	chatStatus.SetText(" Enter:Send | Tab:Scroll | F5:Refresh | F8:Clear | F9:File | Esc:Back ")
 
 	// Layout
 	mainFlex := tview.NewFlex().SetDirection(tview.FlexRow).
@@ -137,6 +137,9 @@ func (a *App) createChatPage(contactID string) tview.Primitive {
 			return nil
 		case tcell.KeyF8:
 			a.showClearHistoryDialog(contactID)
+			return nil
+		case tcell.KeyF9:
+			a.showSendFileDialog(contactID)
 			return nil
 		case tcell.KeyPgUp:
 			row, col := a.chatView.GetScrollOffset()

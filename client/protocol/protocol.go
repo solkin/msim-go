@@ -515,6 +515,44 @@ func (c *Client) GetOfflineMessages() error {
 	return c.Send(TypeOffmsg)
 }
 
+// SendFile initiates a file transfer
+// Format: fsnd|recipient|filename|size|hash
+func (c *Client) SendFile(recipient, filename string, size int64, hash string) error {
+	return c.Send(TypeFsnd, recipient, filename, fmt.Sprintf("%d", size), hash)
+}
+
+// AcceptFile accepts a file transfer
+// Format: facc|sender|session_id
+func (c *Client) AcceptFile(sender, sessionID string) error {
+	return c.Send(TypeFacc, sender, sessionID)
+}
+
+// DeclineFile declines a file transfer
+// Format: fdec|sender|session_id|reason
+func (c *Client) DeclineFile(sender, sessionID, reason string) error {
+	return c.Send(TypeFdec, sender, sessionID, reason)
+}
+
+// CancelFile cancels a file transfer
+// Format: fcan|user|session_id|reason
+func (c *Client) CancelFile(user, sessionID, reason string) error {
+	return c.Send(TypeFcan, user, sessionID, reason)
+}
+
+// GetFileStatus requests file transfer status
+// Format: fst|session_id
+func (c *Client) GetFileStatus(sessionID string) error {
+	return c.Send(TypeFst, sessionID)
+}
+
+// GetServerAddr returns the server address for file transfer connections
+func (c *Client) GetServerAddr() string {
+	if c.conn == nil {
+		return ""
+	}
+	return c.conn.RemoteAddr().(*net.TCPAddr).IP.String()
+}
+
 // ParseHistory parses history response content
 // Format: msg|sender|text|timestamp|status,msg|sender|text|timestamp|status,...
 func ParseHistory(content string) []Message {
