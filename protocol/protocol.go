@@ -34,10 +34,16 @@ func ParsePacket(line string) (*Packet, error) {
 		pkt.Content = unescape(parts[1])
 		pkt.Fields = splitUnescaped(pkt.Content, '|')
 	} else if len(parts) >= 3 {
-		// TYPE|DESTINATION|CONTENT
+		// TYPE|DESTINATION|CONTENT or TYPE|DESTINATION|FIELD1|FIELD2|...
 		pkt.Destination = unescape(parts[1])
-		pkt.Content = unescape(parts[2])
-		pkt.Fields = splitUnescaped(pkt.Content, '|')
+		// Content is everything after destination
+		// Unescape each part and store in Fields
+		pkt.Fields = make([]string, len(parts)-2)
+		for i := 2; i < len(parts); i++ {
+			pkt.Fields[i-2] = unescape(parts[i])
+		}
+		// Content is the joined fields (for backwards compatibility)
+		pkt.Content = strings.Join(pkt.Fields, "|")
 	}
 
 	return pkt, nil
