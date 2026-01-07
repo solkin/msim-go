@@ -641,12 +641,17 @@ func (s *Server) handleBye(session *Session, pkt *protocol.Packet, conn net.Conn
 // completionTime - время завершения обслуживания/перезагрузки в формате ISO 8601 (UTC)
 // Для timeout completionTime может быть нулевым
 func (s *Server) Shutdown(reason string, completionTime time.Time) {
-	s.mu.RLock()
+	// Set shutdown flag and close listener
+	s.mu.Lock()
+	s.shutdown = true
+	if s.listener != nil {
+		s.listener.Close()
+	}
 	sessions := make([]*Session, 0, len(s.sessions))
 	for _, sess := range s.sessions {
 		sessions = append(sessions, sess)
 	}
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	var details string
 	if !completionTime.IsZero() {

@@ -19,6 +19,8 @@ type Server struct {
 	sessions    map[string]*Session
 	mu          sync.RWMutex
 	fileManager *FileTransferManager
+	listener    net.Listener
+	shutdown    bool
 }
 
 type ServerConfig struct {
@@ -61,6 +63,7 @@ func (s *Server) Start() error {
 	if err != nil {
 		return err
 	}
+	s.listener = listener
 	defer listener.Close()
 
 	log.Printf("MSIM server started on port %d", s.config.Port)
@@ -68,6 +71,13 @@ func (s *Server) Start() error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			s.mu.RLock()
+			isShutdown := s.shutdown
+			s.mu.RUnlock()
+			if isShutdown {
+				log.Printf("Server shutdown, stopping accept loop")
+				return nil
+			}
 			log.Printf("Error accepting connection: %v", err)
 			continue
 		}

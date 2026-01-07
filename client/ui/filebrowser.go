@@ -152,7 +152,7 @@ func (a *App) showFileBrowser(mode FileBrowserMode, initialPath string, filename
 
 		currentDir = dir
 		pathInput.SetText(dir)
-		
+
 		title := " Select File "
 		if mode == FileBrowserModeDirectory {
 			title = " Select Directory "
@@ -351,4 +351,3 @@ func formatFileSize(size int64) string {
 		return fmt.Sprintf("%d B", size)
 	}
 }
-
